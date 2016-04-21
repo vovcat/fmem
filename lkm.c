@@ -236,9 +236,73 @@ static ssize_t read_mem(struct file * file, char __user * buf,
 static ssize_t write_mem(struct file * file, const char __user * buf, 
 			 size_t count, loff_t *ppos)
 {
-	return 0;
-}
+  unsigned long p = *ppos;
+  ssize_t read, sz;
+  char *ptr;
 
+  //	if (!valid_phys_addr_range(p, count))  //good bye;)
+  //		return -EFAULT;
+  //	XXX solve here problem of RAM maximum?
+	
+  read = 0;
+#ifdef __ARCH_HAS_NO_PAGE_ZERO_MAPPED
+  /* we don't have page 0 mapped on sparc and m68k.. */
+  if (p < PAGE_SIZE) {
+    sz = PAGE_SIZE - p;
+    if (sz > count) 
+      sz = count; 
+    if (sz > 0) {
+      if (clear_user(buf, sz))
+	return -EFAULT;
+      buf += sz; 
+      p += sz; 
+      count -= sz; 
+      read += sz; 
+    }
+  }
+#endif
+
+  while (count > 0) {
+    /*
+     * Handle first page in case it's not aligned
+     */
+    if (-p & (PAGE_SIZE - 1))
+      sz = -p & (PAGE_SIZE - 1);
+    else
+      sz = PAGE_SIZE;
+
+    sz = min_t(unsigned long, sz, count);
+
+    /*
+     * On ia64 if a page has been mapped somewhere as
+     * uncached, then it must also be accessed uncached
+     * by the kernel or data corruption may occur
+     */
+    ptr = my_xlate_dev_mem_ptr(p);
+
+    if (!ptr){
+      dbgprint ("xlate FAIL, p: %lX",p);
+      return -EFAULT;
+    }
+
+    if (copy_from_user(ptr, buf, sz)) {
+      dbgprint ("copy_to_user FAIL, ptr: %p",ptr);
+      my_unxlate_dev_mem_ptr(p, ptr);
+      return -EFAULT;
+    }
+
+    my_unxlate_dev_mem_ptr(p, ptr);
+
+    buf += sz;
+    p += sz;
+    count -= sz;
+    read += sz;
+  }
+
+  *ppos += read;
+  return read;
+}
+	
 #ifndef CONFIG_MMU
 static unsigned long get_unmapped_area_mem(struct file *file,
 					   unsigned long addr,
